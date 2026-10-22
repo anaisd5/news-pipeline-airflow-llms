@@ -5,6 +5,7 @@ JSON file named by the logical date. The LLM, the rendering and the sending
 come later.
 """
 
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -21,17 +22,43 @@ from airflow.task.trigger_rule import TriggerRule  # noqa: E402
 from news.collect import SOURCES, get_feed  # noqa: E402
 from news.compose import compose_bulletin  # noqa: E402
 from news.deliver import is_enabled, send_email, send_push  # noqa: E402
-from news.curate import DEFAULT_LIMIT, DEFAULT_PER_PUBLISHER, DEFAULT_WINDOW_HOURS, curate  # noqa: E402
+from news.curate import DEFAULT_LIMIT, DEFAULT_PER_PUBLISHER, curate  # noqa: E402
 from news.render import render_email, render_push  # noqa: E402
-from news.storage import read_json, read_text, run_dir, slugify, write_json, write_text  # noqa: E402
+from news.storage import read_json, read_text, run_dir, run_slug, slugify, write_json, write_text  # noqa: E402
+
+
+def alert_failure(context) -> None:
+    """
+    Pushes a notification when a task has definitively failed.
+
+    Called after the last retry, through default_args, so it covers every task
+    of the DAG. It must never raise: a callback that fails is silent (course 08),
+    and an alert that disappears is worse than no alert.
+
+    Args:
+        context: Airflow's task context.
+    """
+    instance = context.get("task_instance")
+    try:
+        send_push(
+            f"{instance.task_id} a échoué.\n\nRun {context.get('run_id')}\n"
+            f"Regarde les logs de ce DAG.",
+            title="Bulletin en echec",
+            slug=run_slug(context["logical_date"]),
+            tags="warning",  # ntfy turns the tag into an emoji, which a header cannot carry
+        )
+    except Exception as error:  # noqa: BLE001 — an alert must not break the run
+        print(f"alert could not be pushed: {error!r}")
 
 
 @dag(
     dag_id="bulletin_news",
     start_date=datetime(2026, 10, 1),
-    schedule=None,  # manual while the pipeline is incomplete; "0 6 * * *" later
+    schedule="0 7,19 * * *",  # 07:00 and 19:00 UTC — the courses' reminder: not Paris time
     catchup=False,
     max_active_runs=1,
+    max_consecutive_failed_dag_runs=5,  # stop nagging after five failed runs in a row
+    default_args={"on_failure_callback": alert_failure},
     tags=["bulletin"],
 )
 def bulletin_news():
@@ -47,7 +74,7 @@ def bulletin_news():
         """Fetches one feed and writes it raw. Returns the file path, not the content."""
         context = get_current_context()
         feed = get_feed(url, source=name)
-        path = run_dir(context["ds"], "raw") / f"{slugify(name)}.json"
+        path = run_dir(run_slug(context["logical_date"]), "raw") / f"{slugify(name)}.json"
         print(f"{name}: {len(feed['entries'])} entries (HTTP {feed['status']})")
         return write_json(path, feed)
 
@@ -62,7 +89,7 @@ def bulletin_news():
         articles = curate(
             feeds,
             reference=context["logical_date"],
-            hours=DEFAULT_WINDOW_HOURS,
+            hours=int(os.environ.get("WINDOW_HOURS", 12)),  # two runs a day: 12 h avoids repeats
             limit=DEFAULT_LIMIT,
             per_publisher=DEFAULT_PER_PUBLISHER,
         )
@@ -74,7 +101,7 @@ def bulletin_news():
         for article in articles:
             print(f"   {article['published_iso']}  {article['title'][:70]}")
 
-        path = run_dir(context["ds"]) / "articles.json"
+        path = run_dir(run_slug(context["logical_date"])) / "articles.json"
         return write_json(path, articles)
 
     @task(
@@ -92,7 +119,7 @@ def bulletin_news():
         bulletin = compose_bulletin(articles, reference=context["logical_date"])
 
         print(bulletin[:800])
-        path = run_dir(context["ds"]) / "bulletin.md"
+        path = run_dir(run_slug(context["logical_date"])) / "bulletin.md"
         return write_text(path, bulletin)
 
     # ignore_downstream_trigger_rules=False: without it a short circuit skips the
@@ -115,7 +142,7 @@ def bulletin_news():
         result = send_push(
             render_push(bulletin),
             title=f"Bulletin du {context['logical_date'].strftime('%d/%m')}",
-            ds=context["ds"],
+            slug=run_slug(context["logical_date"]),
         )
         print(result)
         return result
@@ -130,7 +157,7 @@ def bulletin_news():
             reference=context["logical_date"],
             article_count=len(read_json(articles_path)),
         )
-        result = send_email(subject, page, bulletin, ds=context["ds"])
+        result = send_email(subject, page, bulletin, slug=run_slug(context["logical_date"]))
         print(result)
         return result
 
@@ -138,7 +165,7 @@ def bulletin_news():
     def journalise() -> str:
         """Closes the run, whichever channels were switched on (course 05)."""
         context = get_current_context()
-        return f"bulletin of {context['ds']} done"
+        return f"bulletin of {run_slug(context['logical_date'])} done"
 
     articles = curate_articles(collect_source.expand_kwargs(SOURCES))
     bulletin = write_bulletin(articles)

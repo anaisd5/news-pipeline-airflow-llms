@@ -7,8 +7,10 @@ Two channels, each switched on or off on its own:
 
 And one switch above them both:
 
-    DELIVERY_MODE=draft   (default) write the message to data/<ds>/ instead of sending
+    DELIVERY_MODE=draft   (default) write the message instead of sending it
     DELIVERY_MODE=live    actually send
+    PUSH_MODE / MAIL_MODE override it for one channel: PUSH_MODE=live with
+                          MAIL_MODE=draft sends the notification and files the email
 
 `draft` is there to let you work on the wording without filling your inbox, and
 to let the pipeline run end to end before you own a topic or an SMTP account.
@@ -30,6 +32,7 @@ sending the same bulletin twice.
 
 import os
 import smtplib
+import unicodedata
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -65,67 +68,98 @@ def is_enabled(channel: str) -> bool:
     return value in ("true", "1", "yes", "on")
 
 
-def is_draft() -> bool:
+def is_draft(channel: str) -> bool:
     """
-    Says whether nothing should actually leave the machine.
+    Says whether this channel should write instead of send.
 
-    Returns:
-        bool: True unless DELIVERY_MODE is exactly "live".
-    """
-    return os.environ.get("DELIVERY_MODE", "draft").strip().lower() != "live"
-
-
-def marker_path(ds: str, channel: str) -> Path:
-    """
-    Returns the file that records a successful delivery for one day and channel.
+    PUSH_MODE / MAIL_MODE decide per channel; DELIVERY_MODE is the fallback for
+    both. That is what lets the push go out while the mail stays a draft.
 
     Args:
-        ds (str): The logical date, as YYYY-MM-DD.
+        channel (str): "push" or "mail".
+
+    Returns:
+        bool: True unless the mode for this channel is exactly "live".
+    """
+    per_channel = os.environ.get(f"{channel.upper()}_MODE", "").strip().lower()
+    mode = per_channel or os.environ.get("DELIVERY_MODE", "draft").strip().lower()
+    return mode != "live"
+
+
+def marker_path(slug: str, channel: str) -> Path:
+    """
+    Returns the file that records a successful delivery for one run and channel.
+
+    The marker lives in the run's own folder, so the evening run does not see
+    the morning's marker — while replaying the same run still finds its own.
+
+    Args:
+        slug (str): What storage.run_slug returned.
         channel (str): "push" or "mail".
 
     Returns:
         Path: The marker's path, whether it exists or not.
     """
-    return run_dir(ds) / f"sent-{channel}.marker"
+    return run_dir(slug) / f"sent-{channel}.marker"
 
 
-def already_sent(ds: str, channel: str) -> bool:
+def already_sent(slug: str, channel: str) -> bool:
     """
-    Says whether this channel already delivered for this day.
+    Says whether this channel already delivered for this run.
 
     Args:
-        ds (str): The logical date.
+        slug (str): What storage.run_slug returned.
         channel (str): "push" or "mail".
 
     Returns:
         bool: True when the marker is there.
     """
-    return marker_path(ds, channel).exists()
+    return marker_path(slug, channel).exists()
 
 
-def mark_sent(ds: str, channel: str, detail: str = "") -> str:
+def mark_sent(slug: str, channel: str, detail: str = "") -> str:
     """
     Records that this channel delivered, so a replay does not send again.
 
     Args:
-        ds (str): The logical date.
+        slug (str): What storage.run_slug returned.
         channel (str): "push" or "mail".
         detail (str): Free text kept in the marker, e.g. the recipient.
 
     Returns:
         str: The marker's path.
     """
-    return write_text(marker_path(ds, channel), f"{channel} delivered {detail}".strip() + "\n")
+    return write_text(marker_path(slug, channel), f"{channel} delivered {detail}".strip() + "\n")
 
 
-def send_push(text: str, title: str, ds: str) -> str:
+def ascii_header(value: str) -> str:
+    """
+    Makes a string safe to put in an HTTP header.
+
+    Headers are latin-1 by specification: an emoji or an accent in a title makes
+    requests raise UnicodeEncodeError, and the notification is lost. Accents are
+    folded ("échec" becomes "echec") and anything else is dropped. Only header
+    values go through this — the message body keeps its accents.
+
+    Args:
+        value (str): The intended header value.
+
+    Returns:
+        str: The same value, in ASCII.
+    """
+    folded = unicodedata.normalize("NFKD", value)
+    return "".join(c for c in folded if not unicodedata.combining(c)).encode("ascii", "ignore").decode().strip()
+
+
+def send_push(text: str, title: str, slug: str, tags: str = "newspaper") -> str:
     """
     Pushes the bulletin to the phone through ntfy.
 
     Args:
         text (str): The message body, already shortened by news.render.
-        title (str): The notification's title.
-        ds (str): The logical date, for the draft file and the marker.
+        title (str): The notification's title; folded to ASCII for the header.
+        tags (str): ntfy tags, which the app shows as emoji — "warning" for an alert.
+        slug (str): What storage.run_slug returned, for the draft file and the marker.
 
     Returns:
         str: What happened, for the task log.
@@ -133,11 +167,11 @@ def send_push(text: str, title: str, ds: str) -> str:
     Raises:
         DeliverError: If the topic is missing or the server refuses.
     """
-    if already_sent(ds, "push"):
-        return f"push already delivered for {ds}, skipped"
+    if already_sent(slug, "push"):
+        return f"push already delivered for {slug}, skipped"
 
-    if is_draft():
-        path = write_text(run_dir(ds) / "push.txt", f"{title}\n\n{text}\n")
+    if is_draft("push"):
+        path = write_text(run_dir(slug) / "push.txt", f"{title}\n\n{text}\n")
         return f"draft written to {path}"
 
     topic = os.environ.get("NTFY_TOPIC", "")
@@ -151,10 +185,10 @@ def send_push(text: str, title: str, ds: str) -> str:
             url,
             data=text.encode("utf-8"),
             headers={
-                "Title": title,
+                "Title": ascii_header(title),
                 # The app renders Markdown, so the headings survive.
                 "Markdown": "true",
-                "Tags": "newspaper",
+                "Tags": tags,
                 # The Android app crops long text in its own view (ntfy issue #1515);
                 # its web view does not. Tapping the notification opens the topic there,
                 # where the bulletin is complete and formatted.
@@ -168,11 +202,11 @@ def send_push(text: str, title: str, ds: str) -> str:
     if response.status_code >= 400:
         raise DeliverError(f"{server} returned HTTP {response.status_code}: {response.text[:200]}")
 
-    mark_sent(ds, "push", f"to {server}")
+    mark_sent(slug, "push", f"to {server}")
     return f"push sent through {server} ({len(text.encode('utf-8'))} bytes)"
 
 
-def send_email(subject: str, html_body: str, text_body: str, ds: str) -> str:
+def send_email(subject: str, html_body: str, text_body: str, slug: str) -> str:
     """
     Sends the bulletin by email through SMTP, with STARTTLS.
 
@@ -183,7 +217,7 @@ def send_email(subject: str, html_body: str, text_body: str, ds: str) -> str:
         subject (str): The subject line.
         html_body (str): The HTML page from news.render.
         text_body (str): The Markdown bulletin, as the plain-text part.
-        ds (str): The logical date, for the draft file and the marker.
+        slug (str): What storage.run_slug returned, for the draft file and the marker.
 
     Returns:
         str: What happened, for the task log.
@@ -191,11 +225,11 @@ def send_email(subject: str, html_body: str, text_body: str, ds: str) -> str:
     Raises:
         DeliverError: If the configuration is incomplete or the server refuses.
     """
-    if already_sent(ds, "mail"):
-        return f"mail already delivered for {ds}, skipped"
+    if already_sent(slug, "mail"):
+        return f"mail already delivered for {slug}, skipped"
 
-    if is_draft():
-        path = write_text(run_dir(ds) / "email.html", html_body)
+    if is_draft("mail"):
+        path = write_text(run_dir(slug) / "email.html", html_body)
         return f"draft written to {path}"
 
     host = os.environ.get("SMTP_HOST", "")
@@ -231,5 +265,5 @@ def send_email(subject: str, html_body: str, text_body: str, ds: str) -> str:
     except (smtplib.SMTPException, OSError) as error:
         raise DeliverError(f"sending through {host}:{port} failed: {error!r}") from error
 
-    mark_sent(ds, "mail", f"to {recipient}")
+    mark_sent(slug, "mail", f"to {recipient}")
     return f"mail sent to {recipient} through {host}"

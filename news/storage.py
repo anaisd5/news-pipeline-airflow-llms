@@ -29,18 +29,34 @@ def data_dir() -> Path:
     return Path(os.environ.get("BULLETIN_DATA_DIR", DEFAULT_DATA_DIR))
 
 
-def run_dir(ds: str, *parts: str) -> Path:
+def run_slug(logical_date) -> str:
+    """
+    Names one run: its date, then its hour.
+
+    The DAG runs twice a day, so a folder per date would have the evening run
+    overwrite the morning one. "2026-10-23/07h" keeps both, grouped by day.
+
+    Args:
+        logical_date: The run's logical date, timezone-aware.
+
+    Returns:
+        str: The relative folder of this run.
+    """
+    return logical_date.strftime("%Y-%m-%d/%Hh")
+
+
+def run_dir(slug: str, *parts: str) -> Path:
     """
     Returns (and creates) the folder of one run, optionally a subfolder of it.
 
     Args:
-        ds (str): The logical date, as YYYY-MM-DD.
+        slug (str): What run_slug returned, e.g. "2026-10-23/07h".
         *parts (str): Optional subfolders, e.g. "raw".
 
     Returns:
         Path: The folder, created if needed.
     """
-    folder = data_dir().joinpath(ds, *parts)
+    folder = data_dir().joinpath(slug, *parts)
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
