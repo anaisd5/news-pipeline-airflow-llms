@@ -8,9 +8,10 @@ once and never rewritten per channel.
 import html
 import re
 from datetime import datetime
-from pathlib import Path
 
-TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "templates" / "bulletin.html"
+from news.storage import project_root
+
+TEMPLATE_PATH = project_root() / "templates" / "bulletin.html"
 
 # ntfy sends anything over 4096 bytes as a file attachment instead of a message,
 # which defeats the point of a notification. Staying under it keeps it readable.

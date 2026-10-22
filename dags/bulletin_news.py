@@ -6,25 +6,20 @@ come later.
 """
 
 import os
-import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 
-# The `news` package sits one level above this file, and Airflow only puts the
-# dags folder itself on the import path. Two cleaner options for later: move
-# `news/` inside dags/, or install the project as a package (pip install -e).
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# `news` is importable because it sits next to this file, inside the dags folder,
+# which Airflow puts on the import path.
+from airflow.sdk import dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowSkipException
+from airflow.task.trigger_rule import TriggerRule
 
-from airflow.sdk import dag, get_current_context, task  # noqa: E402
-from airflow.sdk.exceptions import AirflowSkipException  # noqa: E402
-from airflow.task.trigger_rule import TriggerRule  # noqa: E402
-
-from news.collect import SOURCES, get_feed  # noqa: E402
-from news.compose import compose_bulletin  # noqa: E402
-from news.deliver import is_enabled, send_email, send_push  # noqa: E402
-from news.curate import DEFAULT_LIMIT, DEFAULT_PER_PUBLISHER, curate  # noqa: E402
-from news.render import render_email, render_push  # noqa: E402
-from news.storage import read_json, read_text, run_dir, run_slug, slugify, write_json, write_text  # noqa: E402
+from news.collect import SOURCES, get_feed
+from news.compose import compose_bulletin
+from news.deliver import is_enabled, send_email, send_push
+from news.curate import DEFAULT_LIMIT, DEFAULT_PER_PUBLISHER, curate
+from news.render import render_email, render_push
+from news.storage import read_json, read_text, run_dir, run_slug, slugify, write_json, write_text
 
 
 def alert_failure(context) -> None:

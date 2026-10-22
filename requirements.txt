@@ -1,0 +1,18 @@
+# Pinned so the server installs exactly what this machine runs.
+#
+# Airflow must be installed with its own constraints file, which pins every one
+# of its dependencies for one Python version:
+#
+#   pip install -r requirements.txt \
+#       --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.1/constraints-3.10.txt"
+#
+# Change 3.10 to your Python version, and keep both numbers in step with the
+# Airflow version below.
+
+apache-airflow==3.3.1
+
+# RSS parsing: handles the Atom/RSS variants and the malformed dates feeds carry.
+feedparser==6.0.14
+
+# HTTP for the LLM call and the ntfy notification.
+requests==2.34.2

@@ -31,7 +31,9 @@ from pathlib import Path
 
 import requests
 
-PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "bulletin.md"
+from news.storage import data_dir, project_root
+
+PROMPT_PATH = project_root() / "prompts" / "bulletin.md"
 
 DEFAULT_BACKEND = "fake"
 DEFAULT_TEMPERATURE = 0.2
@@ -300,7 +302,7 @@ if __name__ == "__main__":
     import glob
     from datetime import timezone
 
-    paths = sorted(glob.glob(str(Path(__file__).resolve().parents[1] / "data" / "*" / "articles.json")))
+    paths = sorted(glob.glob(str(data_dir() / "*" / "*" / "articles.json")))
     if not paths:
         raise SystemExit("no data/<date>/articles.json yet: run the DAG first")
 

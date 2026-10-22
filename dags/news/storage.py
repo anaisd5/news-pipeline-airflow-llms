@@ -14,9 +14,26 @@ import re
 import tempfile
 from pathlib import Path
 
+def project_root() -> Path:
+    """
+    Finds the project's root folder, wherever this package is moved to.
+
+    Walks up from this file until it sees the folders every layout has. Counting
+    parents would break the day the package moves again, which is exactly what
+    happened when news/ went under dags/.
+
+    Returns:
+        Path: The folder holding prompts/ and templates/.
+    """
+    for folder in Path(__file__).resolve().parents:
+        if (folder / "prompts").is_dir() and (folder / "templates").is_dir():
+            return folder
+    return Path(__file__).resolve().parents[2]
+
+
 # Default: the project's own data/ folder, which .gitignore excludes.
 # BULLETIN_DATA_DIR overrides it, which is how the server will point somewhere else.
-DEFAULT_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+DEFAULT_DATA_DIR = project_root() / "data"
 
 
 def data_dir() -> Path:
